@@ -49,25 +49,35 @@ MAIN_PY = os.path.abspath(os.environ.get("MAIN_PY") or os.path.join(PROJ, "ToEat
 PROBE_MAIN = os.environ.get("PROBE_MAIN") == "1"
 
 PROBE_HEAD = '''# === probe injected by CI (PROBE_MAIN=1) ===
-import os as _probe_os, sys as _probe_sys, traceback as _probe_tb
+import sys, os
 def _probe(msg):
-    try:
-        _d = _probe_os.environ.get("ANDROID_PUBLIC") or "/data/local/tmp"
-        with open(_probe_os.path.join(_d, "py-probe.log"), "a") as _f:
-            _f.write(msg + "\\n")
-    except Exception:
-        pass
-_probe("main.py begin name=%r argv=%r cwd=%r priv=%r pub=%r" % (
-    __name__, _probe_sys.argv, _probe_os.getcwd(),
-    _probe_os.environ.get("ANDROID_PRIVATE"), _probe_os.environ.get("ANDROID_PUBLIC")))
+    _msg = str(msg)
+    for _d in (os.environ.get("ANDROID_PUBLIC"), os.environ.get("ANDROID_PRIVATE")):
+        if not _d:
+            continue
+        try:
+            _f = open(_d + "/py-probe.log", "a")
+            _f.write(_msg + "\\n")
+            _f.flush()
+            _f.close()
+        except Exception:
+            pass
+_probe("A: main.py 被执行, __name__=%r" % (__name__,))
+_probe("B: argv=%r" % (sys.argv,))
+_probe("C: pub=%r priv=%r cwd=%r" % (
+    os.environ.get("ANDROID_PUBLIC"), os.environ.get("ANDROID_PRIVATE"), os.getcwd()))
+_probe("D: sys.version=%s" % (sys.version,))
 try:
-    _pd = _probe_os.environ.get("ANDROID_PUBLIC")
+    _probe("E: priv listing=%r" % (sorted(os.listdir(os.environ.get("ANDROID_PRIVATE", "")))[:40],))
+except Exception as _e:
+    _probe("E: listdir failed %r" % (_e,))
+try:
+    _pd = os.environ.get("ANDROID_PUBLIC")
     if _pd:
-        _probe_sys.stderr = _probe_sys.stdout = open(
-            _probe_os.path.join(_pd, "py-stderr.txt"), "a", buffering=1)
-        _probe("stderr redirected")
-except Exception as _pe:
-    _probe("stderr redirect failed: %r" % (_pe,))
+        sys.stderr = sys.stdout = open(_pd + "/py-stderr.txt", "a", buffering=1)
+        _probe("F: stderr 已重定向")
+except Exception as _e:
+    _probe("F: 重定向失败 %r" % (_e,))
 # === end probe ===
 '''
 
@@ -75,14 +85,19 @@ PROBE_TAIL_OLD = 'if __name__ == "__main__":\n    main()'
 
 PROBE_TAIL_NEW = '''if __name__ == "__main__":
     try:
-        _probe("calling main()")
+        _probe("G: 准备调用 main()")
         main()
-        _probe("main() returned normally")
+        _probe("H: main() 正常返回")
     except SystemExit as _se:
-        _probe("SystemExit: %r" % (_se,))
+        _probe("H: SystemExit %r" % (_se,))
         raise
-    except BaseException:
-        _probe("EXCEPTION:\\n" + _probe_tb.format_exc())
+    except BaseException as _exc:
+        _probe("H: 异常 %r" % (_exc,))
+        try:
+            import traceback as _tb
+            _probe("I: traceback:\\n" + _tb.format_exc())
+        except BaseException as _e2:
+            _probe("I: 取 traceback 也失败 %r" % (_e2,))
         raise
 '''
 
@@ -205,13 +220,45 @@ def build_dist():
 
     if PROBE_MAIN:
         text = open(main_dst, encoding="utf-8").read()
+
+        # 探针必须插在 shebang / encoding cookie / from __future__ 之后，
+        # 否则 "from __future__ imports must occur at the beginning of the file"
+        # 会让整个 main.py 变成 SyntaxError（而 Android 上 stderr 被丢弃，
+        # 看起来就像"什么都没发生"）。
+        lines = text.splitlines(True)
+        insert_at = 0
+        seen_future = False
+        for i, line in enumerate(lines[:40]):
+            stripped = line.strip()
+            if i == 0 and stripped.startswith("#!"):
+                insert_at = i + 1
+            elif i <= 1 and ("coding" in stripped and stripped.startswith("#")):
+                insert_at = i + 1
+            elif stripped.startswith("from __future__"):
+                insert_at = i + 1
+                seen_future = True
+            elif seen_future and (not stripped or stripped.startswith("#")):
+                continue
+            elif seen_future:
+                break
+
+        head = PROBE_HEAD.splitlines(True)
+        lines[insert_at:insert_at] = head
+        text = "".join(lines)
+
         if PROBE_TAIL_OLD in text:
             text = text.replace(PROBE_TAIL_OLD, PROBE_TAIL_NEW)
         else:
             text += "\n\n" + PROBE_TAIL_NEW
-        text = PROBE_HEAD + "\n" + text
+
         open(main_dst, "w", encoding="utf-8").write(text)
-        print("probe 已注入 main.py (%d 字节)" % len(text))
+
+        # 立刻自检语法：宁可让 CI 在这一步失败，也不要出个静默崩的包
+        import py_compile
+        py_compile.compile(main_dst, cfile=main_dst + ".chk", doraise=True)
+        os.unlink(main_dst + ".chk")
+        print("probe 已注入 main.py (%d 字节, 插入点第 %d 行, 语法自检通过)"
+              % (len(text), insert_at + 1))
 
     # The PC runtime libraries (lib/, 103 MB) are useless on Android:
     # librenpython.so already embeds CPython. Provide an empty lib/ so
