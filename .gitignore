@@ -1,0 +1,23 @@
+# 构建产物
+out/
+*.apk
+*.apk.idsig
+*.sha256
+
+# 签名钥匙：绝对不要提交
+android.keystore
+bundle.keystore
+*.jks
+*.keystore
+
+# Ren'Py / Python 产生的临时物
+__pycache__/
+*.pyc
+log.txt
+traceback.txt
+errors.txt
+game/saves/
+game/*.rpyc.bak
+
+# 本地构建脚手架
+.build/

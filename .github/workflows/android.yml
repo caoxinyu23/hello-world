@@ -1,0 +1,220 @@
+name: Build Android APK
+
+# 把 ToEataGod 3.0 (PC / Ren'Py 8.5.3) 打包成 Android APK，全程在 GitHub 的
+# x86_64 runner 上完成 —— 因为 Ren'Py 官方 Android 工具链（gradle + aapt2）
+# 只提供 x86_64 宿主，手机本身编不了。
+#
+# 触发方式：
+#   - 推送到 main
+#   - 手动：Actions -> Build Android APK -> Run workflow
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      clean_build:
+        description: "忽略 Ren'Py SDK 缓存，强制重新下载"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # 用于把 APK 发布到 Release
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    env:
+      RENPY_VERSION: "8.5.3"
+      PYTHONUNBUFFERED: "1"
+      GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          lfs: false
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Show preinstalled Android toolchain
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" | head
+          ls "$ANDROID_HOME/build-tools"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" version || true
+          java -version
+
+      - name: Cache Ren'Py SDK + RAPT
+        id: sdkcache
+        if: inputs.clean_build != true
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/renpy
+          key: renpy-sdk-${{ env.RENPY_VERSION }}-${{ runner.os }}
+          restore-keys: |
+            renpy-sdk-${{ env.RENPY_VERSION }}-
+
+      - name: Download Ren'Py SDK + RAPT
+        if: steps.sdkcache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          base="https://www.renpy.org/dl/${RENPY_VERSION}"
+          curl -fL --retry 3 --retry-delay 5 -o sdk.zip  "${base}/renpy-${RENPY_VERSION}-sdk.zip"
+          curl -fL --retry 3 --retry-delay 5 -o rapt.zip "${base}/renpy-${RENPY_VERSION}-rapt.zip"
+          unzip -q sdk.zip
+          mv "renpy-${RENPY_VERSION}-sdk" renpy
+          # rapt 包内自带预编译的 librenpython.so（arm64-v8a / armeabi-v7a / x86_64），
+          # 不需要 NDK。
+          unzip -q rapt.zip -d renpy
+          chmod +x renpy/renpy.sh renpy/rapt/prototype/gradlew
+          echo "$ANDROID_HOME" > renpy/rapt/sdk.txt
+          ls -la renpy | head
+          ls renpy/rapt
+
+      - name: Restore keystore (optional)
+        # 想在两次构建之间"覆盖安装"，必须用同一个签名。把 keystore 存成 secret
+        # ANDROID_KEYSTORE_B64（base64），否则每次构建会生成一把临时钥匙。
+        run: |
+          set -euo pipefail
+          if [ -n "${ANDROID_KEYSTORE_B64:-}" ]; then
+            echo "$ANDROID_KEYSTORE_B64" | base64 -d > android.keystore
+            echo "keystore restored from secret"
+          else
+            rm -f android.keystore
+            echo "::notice::没有 ANDROID_KEYSTORE_B64 secret，将生成临时签名（新包需卸载旧包才能安装）"
+          fi
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+
+      - name: Compile game scripts (.rpyc)
+        # rapt 的 blocklist.txt 会把 **.rpy 排除出 APK，只打包 .rpyc。
+        # 所以必须先编译：既生成 game/android_compat.rpy 的 .rpyc，
+        # 也顺便验证整份脚本能被 Ren'Py 正常加载。
+        # --keep-orphan-rpyc 必须加：game/tl/espanol/*.rpyc 没有同名 .rpy，
+        # 不加会被当成孤儿删掉（西语文本是原作语言）。
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/compile"
+          mkdir -p "$RUNNER_TEMP/compile" "$RUNNER_TEMP/saves"
+          cp -a game "$RUNNER_TEMP/compile/game"
+          cd "$RUNNER_TEMP/renpy"
+          ./renpy.sh --savedir "$RUNNER_TEMP/saves" "$RUNNER_TEMP/compile" \
+            compile --keep-orphan-rpyc
+          echo "--- compiled rpyc count ---"
+          find "$RUNNER_TEMP/compile/game" -name '*.rpyc' | wc -l
+          ls -la "$RUNNER_TEMP/compile/game/android_compat.rpyc"
+
+      - name: Show Ren'Py log on failure
+        if: failure()
+        run: |
+          for f in "$RUNNER_TEMP/compile/log.txt" "$RUNNER_TEMP/compile/traceback.txt" \
+                   "$RUNNER_TEMP/compile/errors.txt"; do
+            [ -f "$f" ] && { echo "=== $f ==="; tail -80 "$f"; }
+          done
+
+      - name: Build APK with RAPT
+        env:
+          RENPY_SDK: ${{ runner.temp }}/renpy
+          PROJ: ${{ github.workspace }}
+          GAME_DIR: ${{ runner.temp }}/compile/game
+          DIST: ${{ runner.temp }}/dist
+          OUT_DIR: ${{ github.workspace }}/out
+          SDL_AUDIODRIVER: dummy
+        run: |
+          set -euo pipefail
+          DRIVER="$RENPY_SDK/lib/py3-linux-x86_64/python"
+          # RAPT 生成应用图标时会调用 pygame.display.set_mode()，需要一个显示。
+          # runner 预装了 xvfb，用它比 SDL 的 dummy 驱动更接近真实路径。
+          if command -v xvfb-run >/dev/null 2>&1; then
+            xvfb-run -a "$DRIVER" scripts/rapt_build.py
+          else
+            echo "xvfb-run 不可用，回落到 SDL dummy 驱动"
+            SDL_VIDEODRIVER=dummy "$DRIVER" scripts/rapt_build.py
+          fi
+
+      - name: Show RAPT log on failure
+        if: failure()
+        run: |
+          set +e
+          for f in "$RUNNER_TEMP/renpy/rapt/project/log.txt" \
+                   "$RUNNER_TEMP/compile/log.txt"; do
+            if [ -f "$f" ]; then echo "=== $f ==="; tail -120 "$f"; fi
+          done
+          echo "=== gradle outputs ==="
+          find "$RUNNER_TEMP/renpy/rapt/project/app/build/outputs" -maxdepth 3 2>/dev/null | head -20
+          echo "=== disk ==="
+          df -h "$RUNNER_TEMP" | tail -1
+
+      - name: Verify and summarize APK
+        id: apk
+        run: |
+          set -euo pipefail
+          APK=$(ls -S out/*.apk | head -n1)
+          echo "apk=$APK" >> "$GITHUB_OUTPUT"
+          echo "size_mb=$(( $(stat -c%s "$APK") / 1024 / 1024 ))" >> "$GITHUB_OUTPUT"
+          ls -lh "$APK"
+          sha256sum "$APK" | tee "$APK.sha256"
+          echo "--- signing certificate ---"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$APK" | head -12
+          echo "--- manifest (badging) ---"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$APK" | head -8 || true
+          echo "--- native libs ---"
+          unzip -l "$APK" | grep -c 'lib/.*librenpython.so' || true
+          {
+            echo "### APK 构建完成"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| 文件 | \`$(basename "$APK")\` |"
+            echo "| 大小 | $(( $(stat -c%s "$APK") / 1024 / 1024 )) MB |"
+            echo "| SHA256 | \`$(cut -d' ' -f1 "$APK.sha256")\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload APK as workflow artifact
+        # 大体积产物走 artifact 有可能触顶，失败不阻塞；下面还有 Release 兜底。
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: toeatagod-apk-${{ github.run_number }}
+          path: out/*.apk
+          compression-level: 0
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Publish to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="android-build-${GITHUB_RUN_NUMBER}"
+          APK=$(ls -S out/*.apk | head -n1)
+          NOTES="To Eat a God 3.0 —— Android 移植包（未翻译，原作西语）"
+          if ! gh release create "$TAG" "$APK" "$APK.sha256" \
+                --title "To Eat a God 3.0 (Android) #${GITHUB_RUN_NUMBER}" \
+                --notes "$NOTES" \
+                --target "$GITHUB_SHA"; then
+            gh release upload "$TAG" "$APK" "$APK.sha256" --clobber
+          fi
+          gh release view "$TAG" --json url -q .url | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Clean up big scratch dirs
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/dist" "$RUNNER_TEMP/renpy/rapt/project/app/build/intermediates" || true
+          df -h "$RUNNER_TEMP" | tail -1
