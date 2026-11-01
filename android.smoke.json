@@ -1,0 +1,23 @@
+{
+    "package": "org.toeatagod.smoke",
+    "name": "ToEataGod SMOKE",
+    "icon_name": "ToEataGodSmoke",
+    "version": "3.0",
+    "numeric_version": 3001,
+    "orientation": "sensorLandscape",
+    "permissions": [
+        "VIBRATE",
+        "INTERNET"
+    ],
+    "include_pil": false,
+    "include_sqlite": false,
+    "layout": null,
+    "source": false,
+    "expansion": false,
+    "google_play_key": null,
+    "google_play_salt": null,
+    "store": "none",
+    "update_icons": true,
+    "update_always": true,
+    "update_keystores": true
+}

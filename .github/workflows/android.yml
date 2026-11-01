@@ -17,6 +17,10 @@ on:
         description: "忽略 Ren'Py SDK 缓存，强制重新下载"
         type: boolean
         default: false
+      smoke:
+        description: "只构建 ~45MB 冒烟包（最小游戏 + Python 探针），用于排查闪退"
+        type: boolean
+        default: false
 
 permissions:
   contents: write   # 用于把 APK 发布到 Release
@@ -34,6 +38,8 @@ jobs:
       RENPY_VERSION: "8.5.3"
       PYTHONUNBUFFERED: "1"
       GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+      # 冒烟模式：最小游戏 + 独立包名（org.toeatagod.smoke），可与正式包共存
+      IS_SMOKE: ${{ inputs.smoke && '1' || '0' }}
 
     steps:
       - name: Checkout
@@ -99,6 +105,12 @@ jobs:
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
 
+      - name: Prepare smoke game (only when smoke=1)
+        if: env.IS_SMOKE == '1'
+        run: |
+          set -euo pipefail
+          python3 scripts/make_smoke_game.py game "$RUNNER_TEMP/smoke_game"
+
       - name: Compile game scripts (.rpyc)
         # rapt 的 blocklist.txt 会把 **.rpy 排除出 APK，只打包 .rpyc。
         # 所以必须先编译：既生成 game/android_compat.rpy 的 .rpyc，
@@ -110,15 +122,20 @@ jobs:
           SDL_AUDIODRIVER: dummy
         run: |
           set -euo pipefail
+          SRC="game"
+          if [ "$IS_SMOKE" = "1" ]; then SRC="$RUNNER_TEMP/smoke_game"; fi
+          echo "打包源: $SRC ($(du -sh "$SRC" | cut -f1))"
           rm -rf "$RUNNER_TEMP/compile"
           mkdir -p "$RUNNER_TEMP/compile" "$RUNNER_TEMP/saves"
-          cp -a game "$RUNNER_TEMP/compile/game"
+          cp -a "$SRC" "$RUNNER_TEMP/compile/game"
           cd "$RUNNER_TEMP/renpy"
           ./renpy.sh --savedir "$RUNNER_TEMP/saves" "$RUNNER_TEMP/compile" \
             compile --keep-orphan-rpyc
           echo "--- compiled rpyc count ---"
           find "$RUNNER_TEMP/compile/game" -name '*.rpyc' | wc -l
-          ls -la "$RUNNER_TEMP/compile/game/android_compat.rpyc"
+          if [ "$IS_SMOKE" != "1" ]; then
+            ls -la "$RUNNER_TEMP/compile/game/android_compat.rpyc"
+          fi
 
       - name: Show Ren'Py log on failure
         if: failure()
@@ -136,8 +153,14 @@ jobs:
           DIST: ${{ runner.temp }}/dist
           OUT_DIR: ${{ github.workspace }}/out
           SDL_AUDIODRIVER: dummy
+          # 探针：把 Python 侧 stderr 和 traceback 写到
+          # /sdcard/Android/data/<包名>/files/py-{probe.log,stderr.txt}
+          PROBE_MAIN: "1"
         run: |
           set -euo pipefail
+          if [ "$IS_SMOKE" = "1" ]; then
+            export ANDROID_JSON="$GITHUB_WORKSPACE/android.smoke.json"
+          fi
           DRIVER="$RENPY_SDK/lib/py3-linux-x86_64/python"
           # RAPT 生成应用图标时会调用 pygame.display.set_mode()，需要一个显示。
           # runner 预装了 xvfb，用它比 SDL 的 dummy 驱动更接近真实路径。
@@ -202,9 +225,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="android-build-${GITHUB_RUN_NUMBER}"
           APK=$(ls -S out/*.apk | head -n1)
-          NOTES="To Eat a God 3.0 —— Android 移植包（未翻译，原作西语）"
+          if [ "$IS_SMOKE" = "1" ]; then
+            TAG="smoke-build-${GITHUB_RUN_NUMBER}"
+            NOTES="ToEataGod SMOKE：45MB 冒烟包（最小游戏 + Python 探针），用于排查闪退，不是正式包。"
+          else
+            TAG="android-build-${GITHUB_RUN_NUMBER}"
+            NOTES="To Eat a God 3.0 —— Android 移植包（未翻译，原作西语）"
+          fi
           if ! gh release create "$TAG" "$APK" "$APK.sha256" \
                 --title "To Eat a God 3.0 (Android) #${GITHUB_RUN_NUMBER}" \
                 --notes "$NOTES" \

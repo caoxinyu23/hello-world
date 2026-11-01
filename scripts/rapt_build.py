@@ -39,6 +39,53 @@ GAME_DIR = os.path.abspath(os.environ["GAME_DIR"])
 DIST = os.path.abspath(os.environ["DIST"])
 OUT_DIR = os.path.abspath(os.environ.get("OUT_DIR", os.path.join(PROJ, "out")))
 
+# 可选覆盖：冒烟包用 android.smoke.json + 独立包名，可和正式包共存
+ANDROID_JSON = os.path.abspath(os.environ.get("ANDROID_JSON") or os.path.join(PROJ, "android.json"))
+MAIN_PY = os.path.abspath(os.environ.get("MAIN_PY") or os.path.join(PROJ, "ToEataGod.py"))
+
+# PROBE_MAIN=1：往 main.py 顶部注入 stderr 重定向和 traceback 探针，
+# 把 Python 侧的错误写到 <外部私有目录>/py-probe.log 与 py-stderr.txt。
+# Android 上 python 的 stderr 默认被丢弃，没有这个探针就完全看不到异常。
+PROBE_MAIN = os.environ.get("PROBE_MAIN") == "1"
+
+PROBE_HEAD = '''# === probe injected by CI (PROBE_MAIN=1) ===
+import os as _probe_os, sys as _probe_sys, traceback as _probe_tb
+def _probe(msg):
+    try:
+        _d = _probe_os.environ.get("ANDROID_PUBLIC") or "/data/local/tmp"
+        with open(_probe_os.path.join(_d, "py-probe.log"), "a") as _f:
+            _f.write(msg + "\\n")
+    except Exception:
+        pass
+_probe("main.py begin name=%r argv=%r cwd=%r priv=%r pub=%r" % (
+    __name__, _probe_sys.argv, _probe_os.getcwd(),
+    _probe_os.environ.get("ANDROID_PRIVATE"), _probe_os.environ.get("ANDROID_PUBLIC")))
+try:
+    _pd = _probe_os.environ.get("ANDROID_PUBLIC")
+    if _pd:
+        _probe_sys.stderr = _probe_sys.stdout = open(
+            _probe_os.path.join(_pd, "py-stderr.txt"), "a", buffering=1)
+        _probe("stderr redirected")
+except Exception as _pe:
+    _probe("stderr redirect failed: %r" % (_pe,))
+# === end probe ===
+'''
+
+PROBE_TAIL_OLD = 'if __name__ == "__main__":\n    main()'
+
+PROBE_TAIL_NEW = '''if __name__ == "__main__":
+    try:
+        _probe("calling main()")
+        main()
+        _probe("main() returned normally")
+    except SystemExit as _se:
+        _probe("SystemExit: %r" % (_se,))
+        raise
+    except BaseException:
+        _probe("EXCEPTION:\\n" + _probe_tb.format_exc())
+        raise
+'''
+
 KEYSTORE_PASS = "android"   # rapt hardcodes this in local.properties
 KEY_ALIAS = "android"       # ditto
 
@@ -153,7 +200,18 @@ def build_dist():
 
     # split_renpy() moves <dist>/*.py to private/main.py; the PC build ships
     # one launcher script, that is exactly what is needed here.
-    shutil.copy2(os.path.join(PROJ, "ToEataGod.py"), os.path.join(DIST, "ToEataGod.py"))
+    main_dst = os.path.join(DIST, "ToEataGod.py")
+    shutil.copy2(MAIN_PY, main_dst)
+
+    if PROBE_MAIN:
+        text = open(main_dst, encoding="utf-8").read()
+        if PROBE_TAIL_OLD in text:
+            text = text.replace(PROBE_TAIL_OLD, PROBE_TAIL_NEW)
+        else:
+            text += "\n\n" + PROBE_TAIL_NEW
+        text = PROBE_HEAD + "\n" + text
+        open(main_dst, "w", encoding="utf-8").write(text)
+        print("probe 已注入 main.py (%d 字节)" % len(text))
 
     # The PC runtime libraries (lib/, 103 MB) are useless on Android:
     # librenpython.so already embeds CPython. Provide an empty lib/ so
@@ -162,7 +220,8 @@ def build_dist():
 
     # rapt.configuration.Configuration(directory) reads android.json from the
     # directory it is handed, i.e. from <dist>, not from the repo root.
-    shutil.copy2(os.path.join(PROJ, "android.json"), os.path.join(DIST, "android.json"))
+    shutil.copy2(ANDROID_JSON, os.path.join(DIST, "android.json"))
+    print("android.json <- %s" % ANDROID_JSON)
 
     if not os.path.isdir(os.path.join(renpy_dst, "common")):
         sys.exit("renpy/common is missing; rapt cannot split the game tree")
