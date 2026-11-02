@@ -21,11 +21,6 @@ on:
 permissions:
   contents: write   # 用于把 APK 发布到 Release
 
-concurrency:
-  # 必须带上 matrix 维度，否则两个变体会互相取消（同一个 group）
-  group: android-apk-${{ github.ref }}-${{ matrix.name }}
-  cancel-in-progress: true
-
 jobs:
   apk:
     # 每次跑两个变体：正式包（740MB 游戏内容）和冒烟包（4.3MB 最小游戏，
@@ -38,6 +33,12 @@ jobs:
             name: full
           - smoke: "1"
             name: smoke
+
+    # concurrency 必须放在 job 级：matrix 上下文在 workflow 级不可用，
+    # 写在上面会让整个工作流文件校验失败（一个 job 都不会跑）。
+    concurrency:
+      group: android-apk-${{ github.ref }}-${{ matrix.name }}
+      cancel-in-progress: true
 
     runs-on: ubuntu-24.04
     timeout-minutes: 120
