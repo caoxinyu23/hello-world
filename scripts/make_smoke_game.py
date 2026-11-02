@@ -89,7 +89,17 @@ def main():
         print("gui.rpy 主菜单背景已替换为纯色 (匹配 %d 处)" % n)
 
     open(os.path.join(OUT, "script.rpy"), "w", encoding="utf-8").write(SCRIPT)
-    open(os.path.join(OUT, "options.rpy"), "w", encoding="utf-8").write(OPTIONS)
+
+    # options.rpy 必须用正式游戏那一份：screens.rpy 依赖 gui.show_name 等一堆
+    # 定义，用极简版会直接 AttributeError（踩过）。只把会缺资源/串味的几行改掉。
+    src_opts = os.path.join(REPO_GAME, "options.rpy")
+    opts = open(src_opts, encoding="utf-8").read()
+    opts = re.sub(r'^define config\.main_menu_music\s*=.*$\n?', '', opts, flags=re.M)
+    opts = re.sub(r'^define config\.window_icon\s*=.*$\n?', '', opts, flags=re.M)
+    opts = re.sub(r'^define build\.name\s*=.*$', 'define build.name = "ToEataGodSmoke"', opts, flags=re.M)
+    opts = re.sub(r'^define config\.save_directory\s*=.*$', 'define config.save_directory = "toeatagod-smoke"', opts, flags=re.M)
+    open(os.path.join(OUT, "options.rpy"), "w", encoding="utf-8").write(opts)
+    print("options.rpy 复制自正式游戏（已去掉 main_menu_music / window_icon）")
 
     total = 0
     for dp, _, fns in os.walk(OUT):
