@@ -295,6 +295,17 @@ def main():
     print("sdk       = %s" % plat.sdk)
     print("gradlew   = %s" % plat.gradlew)
 
+    # rapt/bin 会被 Actions 的 SDK 缓存一起带过来，里面可能躺着上一次（甚至另一个包）
+    # 的 APK。不清掉的话，下面的 glob 会把它一起拷进 out/，发布步骤再按大小挑最大，
+    # 就会挂错文件（曾经把 build-1 的 777MB 全量包挂到了冒烟包的 release 上）。
+    stale_bin = plat.path("bin")
+    if os.path.isdir(stale_bin):
+        for fn in os.listdir(stale_bin):
+            p = os.path.join(stale_bin, fn)
+            if os.path.isfile(p):
+                os.unlink(p)
+        print("已清空 rapt/bin（缓存可能带出旧 APK）")
+
     iface = interface.Interface()
 
     produced = []
@@ -319,10 +330,17 @@ def main():
         traceback.print_exc()
         sys.exit("rapt build raised an exception (see traceback above)")
 
-    # rapt copies results into rapt/bin/ as well as into `files`.
-    apks = sorted(set(produced) | set(glob.glob(plat.path("bin/*.apk"))))
+    # 优先用本次构建回调给出的文件；glob 只做兜底，且必须和本次包名对得上，
+    # 否则宁可失败也不要发布一个来路不明的包。
+    import json as _json
+    want_pkg = _json.load(open(ANDROID_JSON))["package"]
+
+    apks = [p for p in produced if p.endswith(".apk") and os.path.exists(p)]
     if not apks:
-        sys.exit("build finished but no .apk was found in %s" % plat.path("bin"))
+        apks = [p for p in glob.glob(plat.path("bin/*.apk"))
+                if os.path.basename(p).startswith(want_pkg + "-")]
+    if not apks:
+        sys.exit("本次构建没有产出 %s 的 APK（rapt/bin 里没有匹配文件）" % want_pkg)
 
     os.makedirs(OUT_DIR, exist_ok=True)
 
