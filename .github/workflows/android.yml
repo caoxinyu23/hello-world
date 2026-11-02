@@ -99,6 +99,19 @@ jobs:
           ls -la renpy | head
           ls renpy/rapt
 
+      - name: Patch RAPT with runtime diagnostics
+        # 在 PythonSDLActivity.preparePython() 里加几行日志，把 getFilesDir() 的清单
+        # 和 ANDROID_PRIVATE/ANDROID_PUBLIC 打到 logcat 的 python 标签上。
+        # 同时删掉 rapt/project，强制 copy_project() 用打过补丁的 prototype 重建。
+        run: |
+          set -euo pipefail
+          python3 scripts/patch_rapt_java.py "$RENPY_SDK/rapt"
+          rm -rf "$RUNNER_TEMP/renpy/rapt/project"
+          grep -c "DGENV ANDROID_PRIVATE" \
+            "$RENPY_SDK/rapt/prototype/renpyandroid/src/main/java/org/renpy/android/PythonSDLActivity.java"
+        env:
+          RENPY_SDK: ${{ runner.temp }}/renpy
+
       - name: Restore keystore (optional)
         # 想在两次构建之间"覆盖安装"，必须用同一个签名。把 keystore 存成 secret
         # ANDROID_KEYSTORE_B64（base64），否则每次构建会生成一把临时钥匙。
