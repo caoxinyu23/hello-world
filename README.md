@@ -1,7 +1,16 @@
 # To Eat a God 3.0 → Android APK（GitHub Actions 云构建）
 
-把 `ToEataGod-3.0-pc` 这份 Ren'Py 8.5.3 桌面版打包成 Android APK。
+把 `ToEataGod-3.0-pc` 这份 Ren'Py 桌面版打包成 Android APK。
 **不做翻译**，游戏语言保持原作（西班牙语，含官方英化）。
+
+> **状态：已在真机（vivo V2344A / Android 16 / arm64）上验证可玩** ——
+> 主菜单、对白、字体、横屏都正常。产物：`android-build-11`（783.6 MB）。
+>
+> **最终方案**：Ren'Py **8.4.1** + **官方 launcher** 构建
+> （`renpy.sh launcher android_build`，由 Ren'Py 自己的 Distributor 生成 dist），
+> 不再手搓 dist —— 手搓那份 `private/` 里只有 163 个文件、缺 `private/game`，
+> Ren'Py 找不到脚本，表现就是"Activity 起来 → 20ms 后自己退出 → 闪退"。
+> 官方 path 的 `private/` 有 1001 个文件。
 
 构建在 GitHub 的 x86_64 runner 上跑，因为 Ren'Py 官方的 Android 工具链
 （gradle + aapt2 + RAPT）只提供 x86_64 宿主二进制，手机（aarch64）本地编不了。
@@ -13,11 +22,13 @@
 | 路径 | 说明 |
 | --- | --- |
 | `game/` | 游戏本体（740 MB，1282 个文件），来自 PC 发行版，**未改动** |
-| `renpy/` | 同版本（8.5.3）的 Ren'Py 纯 Python 引擎代码，RAPT 打包时需要 |
+| `renpy/` | 8.5.3 的引擎代码。**注意：最终构建用的是 8.4.1 的官方 launcher**，这一份只在回退到手搓 dist 时才用得上 |
 | `ToEataGod.py` | PC 发行版的启动脚本，RAPT 会把它变成 `main.py` |
 | `game/android_compat.rpy` | **唯一新增的文件**：Android 兼容层，见第六节 |
 | `android.json` | RAPT 的应用配置：包名、应用名、版本、权限、横屏 |
-| `scripts/rapt_build.py` | 驱动 RAPT 的脚本（等价于 launcher 的 "Build" 按钮，但无 GUI） |
+| `scripts/rapt_build.py` | **回退用**：手搓 dist 驱动 RAPT。现役流水线已改走官方 launcher |
+| `scripts/patch_rapt_java.py` | 构建时给 RAPT 的 `PythonSDLActivity` 打诊断补丁（`DGFILES`/`DGENV` 日志） |
+| `scripts/make_smoke_game.py` | 生成 4.3 MB 最小游戏，用于出 ~55 MB 冒烟包快速验证流水线 |
 | `.github/workflows/android.yml` | 流水线本体 |
 | `scripts/make-payload.sh` | 游戏更新时，用它重新铺 `game/` + `renpy/` |
 
