@@ -48,13 +48,19 @@ MAIN_PY = os.path.abspath(os.environ.get("MAIN_PY") or os.path.join(PROJ, "ToEat
 # Android 上 python 的 stderr 默认被丢弃，没有这个探针就完全看不到异常。
 PROBE_MAIN = os.environ.get("PROBE_MAIN") == "1"
 
-PROBE_HEAD = '''# === probe injected by CI (PROBE_MAIN=1) ===
+PROBE_HEAD_TMPL = '''# === probe injected by CI (PROBE_MAIN=1) ===
 import sys, os
+# 不依赖环境变量：Android 上 ANDROID_PUBLIC/ANDROID_PRIVATE 可能根本没传到 Python，
+# 之前那版探针就是因为全靠 os.environ 而"成功地什么都没写"。
+_PUB = "/storage/emulated/0/Android/data/__PROBE_PKG__/files"
 def _probe(msg):
     _msg = str(msg)
-    for _d in (os.environ.get("ANDROID_PUBLIC"), os.environ.get("ANDROID_PRIVATE")):
-        if not _d:
+    _dirs = [_PUB, os.environ.get("ANDROID_PUBLIC"), os.environ.get("ANDROID_PRIVATE")]
+    _seen = set()
+    for _d in _dirs:
+        if not _d or _d in _seen:
             continue
+        _seen.add(_d)
         try:
             _f = open(_d + "/py-probe.log", "a")
             _f.write(_msg + "\\n")
@@ -64,20 +70,21 @@ def _probe(msg):
             pass
 _probe("A: main.py 被执行, __name__=%r" % (__name__,))
 _probe("B: argv=%r" % (sys.argv,))
-_probe("C: pub=%r priv=%r cwd=%r" % (
-    os.environ.get("ANDROID_PUBLIC"), os.environ.get("ANDROID_PRIVATE"), os.getcwd()))
-_probe("D: sys.version=%s" % (sys.version,))
+_probe("C: 环境里的 ANDROID_* = %r" % (
+    sorted((k, v) for k, v in os.environ.items() if k.startswith("ANDROID")),))
+_probe("D: version=%s" % (sys.version,))
+_probe("E: sys.path=%r" % (sys.path,))
+_probe("F: cwd=%r" % (os.getcwd(),))
 try:
-    _probe("E: priv listing=%r" % (sorted(os.listdir(os.environ.get("ANDROID_PRIVATE", "")))[:40],))
+    _probe("G: 私有目录清单=%r" % (
+        sorted(os.listdir(os.environ.get("ANDROID_PRIVATE") or _PUB))[:40],))
 except Exception as _e:
-    _probe("E: listdir failed %r" % (_e,))
+    _probe("G: 列目录失败 %r" % (_e,))
 try:
-    _pd = os.environ.get("ANDROID_PUBLIC")
-    if _pd:
-        sys.stderr = sys.stdout = open(_pd + "/py-stderr.txt", "a", buffering=1)
-        _probe("F: stderr 已重定向")
+    sys.stderr = sys.stdout = open(_PUB + "/py-stderr.txt", "a", buffering=1)
+    _probe("H: stderr 已重定向")
 except Exception as _e:
-    _probe("F: 重定向失败 %r" % (_e,))
+    _probe("H: 重定向失败 %r" % (_e,))
 # === end probe ===
 '''
 
@@ -85,19 +92,19 @@ PROBE_TAIL_OLD = 'if __name__ == "__main__":\n    main()'
 
 PROBE_TAIL_NEW = '''if __name__ == "__main__":
     try:
-        _probe("G: 准备调用 main()")
+        _probe("I: 准备调用 main()")
         main()
-        _probe("H: main() 正常返回")
+        _probe("J: main() 正常返回")
     except SystemExit as _se:
-        _probe("H: SystemExit %r" % (_se,))
+        _probe("J: SystemExit %r" % (_se,))
         raise
     except BaseException as _exc:
-        _probe("H: 异常 %r" % (_exc,))
+        _probe("J: 异常 %r" % (_exc,))
         try:
             import traceback as _tb
-            _probe("I: traceback:\\n" + _tb.format_exc())
+            _probe("K: traceback:\\n" + _tb.format_exc())
         except BaseException as _e2:
-            _probe("I: 取 traceback 也失败 %r" % (_e2,))
+            _probe("K: 取 traceback 也失败 %r" % (_e2,))
         raise
 '''
 
@@ -242,7 +249,9 @@ def build_dist():
             elif seen_future:
                 break
 
-        head = PROBE_HEAD.splitlines(True)
+        import json as _pj
+        probe_pkg = _pj.load(open(ANDROID_JSON))["package"]
+        head = PROBE_HEAD_TMPL.replace("__PROBE_PKG__", probe_pkg).splitlines(True)
         lines[insert_at:insert_at] = head
         text = "".join(lines)
 
