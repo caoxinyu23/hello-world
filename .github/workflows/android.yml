@@ -44,7 +44,9 @@ jobs:
     timeout-minutes: 120
 
     env:
-      RENPY_VERSION: "8.5.3"
+      # 8.5.3 的 android 启动链（PyConfig -> Py_RunMain）在本机会静默返回，
+      # 先用 8.4.1 验证是不是版本侧的回归；确认后可以再回 8.5.x。
+      RENPY_VERSION: "8.4.1"
       PYTHONUNBUFFERED: "1"
       GRADLE_OPTS: "-Dorg.gradle.daemon=false"
       # 冒烟模式：最小游戏 + 独立包名（org.toeatagod.smoke），可与正式包共存

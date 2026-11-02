@@ -32,13 +32,14 @@ SNIPPET = '''
         } catch (Throwable _t) {
             Log.v("python", "DGCHK failed " + _t);
         }
+
         // === end injected diagnostics ===
 '''
 
 
 def patch(java_path):
     src = open(java_path, encoding="utf-8").read()
-    if "DGENV ANDROID_PRIVATE" in src:
+    if "DGFILES count=" in src:
         print("已注入过: %s" % java_path)
         return False
 

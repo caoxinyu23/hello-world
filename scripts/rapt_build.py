@@ -322,16 +322,19 @@ def main():
     def finished(files):
         produced.extend(files)
 
+    # 不同 Ren'Py 版本的 rapt.build.build() 形参略有差异，按签名过滤一下，
+    # 这样在 8.4.x / 8.5.x 上都能跑。
+    import inspect
+    wanted = dict(bundle=False, install=False, launch=False, finished=finished)
     try:
-        build.build(
-            iface,
-            DIST,
-            PROJ,
-            bundle=False,
-            install=False,
-            launch=False,
-            finished=finished,
-        )
+        params = inspect.signature(build.build).parameters
+        kwargs = {k: v for k, v in wanted.items() if k in params}
+        print("build() 接受的参数: %s -> 传入 %s" % (list(params), list(kwargs)))
+    except (TypeError, ValueError):
+        kwargs = wanted
+
+    try:
+        build.build(iface, DIST, PROJ, **kwargs)
     except SystemExit:
         raise
     except Exception:
