@@ -169,31 +169,41 @@ jobs:
             [ -f "$f" ] && { echo "=== $f ==="; tail -80 "$f"; }
           done
 
-      - name: Build APK with RAPT
+      - name: Build APK with the official launcher
+        # 不再手搓 dist：交给 Ren'Py 自己的 Distributor 生成（renpy.sh launcher
+        # android_build）。手搓那份虽然结构看起来对（private.mp3 里有 main.py、
+        # renpy/、lib/），但 8.4.1 和 8.5.3 上都出现"main.py 不被执行、Activity
+        # 600ms 后自动退出"，说明缺的是 Distributor 才会补的东西。
         env:
           RENPY_SDK: ${{ runner.temp }}/renpy
-          PROJ: ${{ github.workspace }}
-          GAME_DIR: ${{ runner.temp }}/compile/game
-          DIST: ${{ runner.temp }}/dist
-          OUT_DIR: ${{ github.workspace }}/out
           SDL_AUDIODRIVER: dummy
-          # 探针：把 Python 侧 stderr 和 traceback 写到
-          # /sdcard/Android/data/<包名>/files/py-{probe.log,stderr.txt}
-          PROBE_MAIN: "1"
         run: |
           set -euo pipefail
+          PROJ="$RUNNER_TEMP/proj"
+          rm -rf "$PROJ" "$GITHUB_WORKSPACE/out"
+          mkdir -p "$PROJ" "$GITHUB_WORKSPACE/out"
+          cp -a "$RUNNER_TEMP/compile/game" "$PROJ/game"
           if [ "$IS_SMOKE" = "1" ]; then
-            export ANDROID_JSON="$GITHUB_WORKSPACE/android.smoke.json"
-          fi
-          DRIVER="$RENPY_SDK/lib/py3-linux-x86_64/python"
-          # RAPT 生成应用图标时会调用 pygame.display.set_mode()，需要一个显示。
-          # runner 预装了 xvfb，用它比 SDL 的 dummy 驱动更接近真实路径。
-          if command -v xvfb-run >/dev/null 2>&1; then
-            xvfb-run -a "$DRIVER" scripts/rapt_build.py
+            cp -a "$GITHUB_WORKSPACE/android.smoke.json" "$PROJ/android.json"
           else
-            echo "xvfb-run 不可用，回落到 SDL dummy 驱动"
-            SDL_VIDEODRIVER=dummy "$DRIVER" scripts/rapt_build.py
+            cp -a "$GITHUB_WORKSPACE/android.json" "$PROJ/android.json"
           fi
+          # 官方路径用 <project>/android.keystore 签名
+          if [ -f "$GITHUB_WORKSPACE/android.keystore" ]; then
+            cp -a "$GITHUB_WORKSPACE/android.keystore" "$PROJ/android.keystore"
+          else
+            keytool -genkeypair -keystore "$PROJ/android.keystore" -alias android \
+              -keyalg RSA -keysize 2048 -validity 20000 \
+              -storepass android -keypass android \
+              -dname "CN=ToEataGod port,O=Port,C=CN"
+          fi
+          echo "$ANDROID_HOME" > "$RENPY_SDK/rapt/sdk.txt"
+          rm -rf "$RENPY_SDK/rapt/project" "$RENPY_SDK/rapt/bin"
+          cd "$RENPY_SDK"
+          xvfb-run -a ./renpy.sh launcher android_build "$PROJ" \
+            --destination "$GITHUB_WORKSPACE/out"
+          echo "--- out ---"
+          ls -l "$GITHUB_WORKSPACE/out"
 
       - name: Show RAPT log on failure
         if: failure()
