@@ -760,6 +760,7 @@ screen preferences():
                     label _("Language")
                     textbutton "English" action Language("ingles")
                     textbutton "Español" action Language ("espanol")
+                    textbutton "中文" action Language("chino")
 
 
                 
