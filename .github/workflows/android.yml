@@ -205,6 +205,35 @@ jobs:
           echo "--- out ---"
           ls -l "$GITHUB_WORKSPACE/out"
 
+      - name: Publish diagnostics on failure
+        # GitHub 的 job 日志需要鉴权，读不到；把 traceback / log 打成 Release 资产，
+        # 这样排查时可以直接用 API 拉下来看，不必让人去网页里翻。
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          D="$RUNNER_TEMP/diag"
+          rm -rf "$D"; mkdir -p "$D"
+          for f in "$RUNNER_TEMP/proj/log.txt" "$RUNNER_TEMP/proj/traceback.txt" \
+                   "$RUNNER_TEMP/proj/errors.txt" \
+                   "$RUNNER_TEMP/compile/log.txt" "$RUNNER_TEMP/compile/traceback.txt" \
+                   "$RUNNER_TEMP/compile/errors.txt" \
+                   "$RUNNER_TEMP/renpy/rapt/project/log.txt"; do
+            if [ -f "$f" ]; then
+              cp "$f" "$D/$(echo "$f" | sed 's|/|_|g')"
+            fi
+          done
+          find "$RUNNER_TEMP/proj" -maxdepth 2 -name "*.txt" 2>/dev/null | while read -r f; do
+            cp "$f" "$D/proj_$(basename "$f")" 2>/dev/null
+          done
+          ls -la "$D"
+          if [ -z "$(ls -A "$D")" ]; then echo "no diagnostics captured" > "$D/EMPTY.txt"; fi
+          TAG="diag-${GITHUB_RUN_NUMBER}-${IS_SMOKE}"
+          gh release create "$TAG" "$D"/* --title "diagnostics $TAG" \
+            --notes "自动化失败诊断（run ${GITHUB_RUN_NUMBER}, smoke=${IS_SMOKE}）" \
+            --target "$GITHUB_SHA" || gh release upload "$TAG" "$D"/* --clobber
+
       - name: Show RAPT log on failure
         if: failure()
         run: |
