@@ -24,6 +24,8 @@ COPY = [
     "screens.rpy",
     "glitch_tag.rpy",
     "kinetic_text_tags.rpy",
+    # gui.rpy 里的字体指向这个文件定义的 _game_font，漏了会 NameError
+    "zz_cjk_font.rpy",
 ]
 COPY_DIRS = ["gui", "fonts"]
 

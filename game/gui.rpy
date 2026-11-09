@@ -57,13 +57,15 @@ define gui.interface_text_color = '#ffffff'
 ## Fonts and Font Sizes ########################################################
 
 ## The font used for in-game text.
-define gui.text_font = "fonts/Tox Typewriter.ttf"
+## 移植改动：换成 FontGroup（见 zz_cjk_font.rpy）——拉丁字符仍用 Tox Typewriter，
+## 中日韩字符回退到 Noto Sans CJK，否则中文全是空白/方框。
+define gui.text_font = _game_font
 
 ## The font used for character names.
-define gui.name_text_font = "fonts/Tox Typewriter.ttf"
+define gui.name_text_font = _game_font
 
 ## The font used for out-of-game text.
-define gui.interface_text_font = "fonts/Tox Typewriter.ttf"
+define gui.interface_text_font = _game_font
 
 ## The size of normal dialogue text.
 define gui.text_size = 35
