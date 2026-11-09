@@ -56,9 +56,13 @@ define gui.interface_text_color = '#ffffff'
 
 ## Fonts and Font Sizes ########################################################
 
+## 移植改动：字体回退组 —— 拉丁字符仍用 Tox Typewriter（保持原作观感），
+## 中日韩字符回退到 DroidSansFallback，否则中文全是空白/方框。
+## 注意：必须用 define 声明（而不是 init 块里的变量），Ren'Py 的 define 有独立的
+## 执行阶段，普通 init 块里的变量在 define 求值时可能还不存在（踩过 NameError）。
+define _game_font = FontGroup().add("fonts/Tox Typewriter.ttf", 0x0020, 0x2E7F).add("fonts/DroidSansFallback.ttf", 0x2E80, 0xFFFF)
+
 ## The font used for in-game text.
-## 移植改动：换成 FontGroup（见 zz_cjk_font.rpy）——拉丁字符仍用 Tox Typewriter，
-## 中日韩字符回退到 Noto Sans CJK，否则中文全是空白/方框。
 define gui.text_font = _game_font
 
 ## The font used for character names.
