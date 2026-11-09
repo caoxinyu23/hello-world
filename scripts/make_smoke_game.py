@@ -25,7 +25,9 @@ COPY = [
     "glitch_tag.rpy",
     "kinetic_text_tags.rpy",
 ]
-COPY_DIRS = ["gui", "fonts"]
+# tl 也要带上：否则 Language("chino") 找不到翻译文件，切换语言时
+# 界面不会有任何变化，冒烟包就没法验证中文是否真的生效。
+COPY_DIRS = ["gui", "fonts", "tl"]
 
 SCRIPT = """\
 # 冒烟测试用脚本：不依赖任何图片/音频资源
